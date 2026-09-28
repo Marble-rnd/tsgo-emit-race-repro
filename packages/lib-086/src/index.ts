@@ -1,0 +1,10 @@
+export * from './file-0';
+import { Servicelib-0860 } from './file-0';
+import { value0 as otherValue } from '@repro/lib-087';
+
+export class Rootlib-086 {
+  private readonly inner = new Servicelib-0860();
+  run(): number {
+    return this.inner.process({ id: 'lib-086', count: otherValue() });
+  }
+}

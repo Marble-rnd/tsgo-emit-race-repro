@@ -1,0 +1,14 @@
+{
+  "name": "tsgo-emit-race-repro",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "app"
+  ],
+  "scripts": {
+    "stress-test": "node scripts/stress-test.mjs 20"
+  },
+  "devDependencies": {
+    "typescript-next": "npm:typescript@7.1.0-dev.20260928.1"
+  }
+}

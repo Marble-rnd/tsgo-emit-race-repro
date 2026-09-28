@@ -1,0 +1,5 @@
+{
+  "name": "@repro/lib-040",
+  "version": "1.0.0",
+  "main": "./src/index.ts"
+}
