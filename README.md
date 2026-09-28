@@ -74,6 +74,27 @@ non-deterministically, depending on goroutine scheduling. We have **not** traced
 interleaving in the Go source; this is the observed mechanism, not a proven code-level root
 cause.
 
+We also checked whether `program.getJavaScriptEmit(files)` — given the full, always-complete
+file list from `getSourceFileNames()` passed explicitly — avoids the bug, since it internally
+sets `ForceEmit: true` (`scripts/check-getjsemit.mjs`). **It does not**: same failure rate, same
+pattern. Looking at `tsc/internal/compiler/emitter.go`'s `sourceFileMayBeEmitted`, the external-
+library check runs *before* the `forceDtsEmit || forceJsEmit` early-return, so `ForceEmit` never
+gets a chance to override a (mis)classification that already happened. This confirms the bug is
+shared by every emit entry point, not specific to whole-program `emitToString()`.
+
+## A working workaround
+
+Every one of our failures was on a file reached **only transitively** — never one passed as an
+explicit root. So instead of listing just each package's `src/index.ts` as a root (sufficient to
+protect the entry file itself, a separate and already-understood pattern), we tried listing
+**every `.ts` file in every package** as its own explicit root
+(`scripts/diff-run-allroots.mjs`). Root files are never subject to this misclassification in any
+of our testing, so removing every file from the "reached only transitively" category removes it
+from being vulnerable at all — confirmed empirically: **0 failures across 50 trials**, versus a
+baseline of ~30-50%. We've since applied this in the real project this bug was originally found
+in, with the same result at real repo scale (0/20 in a stress test that previously failed
+19-31% of the time).
+
 Run it yourself:
 
 ```bash
@@ -82,6 +103,8 @@ node scripts/stress-test.mjs 20          # pass/fail summary across N isolated t
 node scripts/check-getsourcefiles.mjs    # confirms getSourceFileNames() is always complete
 node scripts/check-external.mjs          # confirms isSourceFileFromExternalLibrary() on any
                                           # missing file from that run, if one occurs
+node scripts/check-getjsemit.mjs         # confirms getJavaScriptEmit() doesn't avoid the bug
+node scripts/diff-run-allroots.mjs       # the working workaround, run repeatedly to confirm 0 failures
 ```
 
 Example output from a real run:
@@ -122,6 +145,10 @@ Missing files by failing trial:
   each other (where it reproduced far more reliably, ~60-100% of paired runs), then found this
   smaller repro reproduces it in complete isolation.
 
+## Upstream issue
+
+Filed as [microsoft/TypeScript#64498](https://github.com/microsoft/TypeScript/issues/64498).
+
 ## Related upstream reports
 
 This looks like it may be the same general bug class as:
@@ -154,3 +181,7 @@ underlying class rather than a regression of the fixed one.
   on runs where `emitToString` is not.
 - `scripts/check-external.mjs` — proves every missing file is misclassified by
   `isSourceFileFromExternalLibrary()`.
+- `scripts/check-getjsemit.mjs` — proves `getJavaScriptEmit()` doesn't avoid the bug either,
+  even given the full deterministic file list from `getSourceFileNames()`.
+- `scripts/diff-run-allroots.mjs` — the working workaround: every file listed as an explicit
+  root instead of just each package's `index.ts`. Run repeatedly to confirm 0 failures.
