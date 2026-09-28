@@ -85,15 +85,27 @@ shared by every emit entry point, not specific to whole-program `emitToString()`
 ## A working workaround
 
 Every one of our failures was on a file reached **only transitively** — never one passed as an
-explicit root. So instead of listing just each package's `src/index.ts` as a root (sufficient to
-protect the entry file itself, a separate and already-understood pattern), we tried listing
-**every `.ts` file in every package** as its own explicit root
+explicit root. Our first attempt at a fix was blunt: instead of listing just each package's
+`src/index.ts` as a root (sufficient to protect the entry file itself, a separate and
+already-understood pattern), list **every `.ts` file in every package** as its own explicit root
 (`scripts/diff-run-allroots.mjs`). Root files are never subject to this misclassification in any
 of our testing, so removing every file from the "reached only transitively" category removes it
 from being vulnerable at all — confirmed empirically: **0 failures across 50 trials**, versus a
-baseline of ~30-50%. We've since applied this in the real project this bug was originally found
-in, with the same result at real repo scale (0/20 in a stress test that previously failed
-19-31% of the time).
+baseline of ~30-50%. This works, but over-includes: every `.ts` file physically present gets
+listed whether or not anything actually imports it, needlessly inflating the root list (we saw
+real repo root counts go from ~140 to ~1400) and the real work the checker/emit steps do on top
+of it.
+
+**A cleaner two-pass version** (`scripts/diff-run-discovery.mjs`) fixes this: build a throwaway
+"discovery" `Program` from just the entry points, use its (always-complete —
+`scripts/check-getsourcefiles.mjs`) `getSourceFileNames()` to find the program's *real*
+transitive closure, then build the real `Program` with exactly that closure (minus genuine
+`node_modules` dependencies) as its root set. This protects exactly the files that need it —
+nothing more, no filesystem walk, no dead/unreferenced files pulled in — at the cost of one extra
+(comparatively cheap) `createProgram` call. Also confirmed empirically: **0 failures across 30
+trials**, with the final root count exactly matching the true reachable file count. We've since
+applied this version in the real project this bug was originally found in, with the same result
+at real repo scale (0/20 in a stress test that previously failed 19-31% of the time).
 
 Run it yourself:
 
@@ -103,6 +115,9 @@ node scripts/stress-test.mjs 20          # pass/fail summary across N isolated t
 node scripts/check-getsourcefiles.mjs    # confirms getSourceFileNames() is always complete
 node scripts/check-external.mjs          # confirms isSourceFileFromExternalLibrary() on any
                                           # missing file from that run, if one occurs
+node scripts/diff-run-discovery.mjs      # the recommended workaround: discover the real closure,
+                                          # then re-root with exactly that (run repeatedly to
+                                          # confirm 0 failures)
 node scripts/check-getjsemit.mjs         # confirms getJavaScriptEmit() doesn't avoid the bug
 node scripts/diff-run-allroots.mjs       # the working workaround, run repeatedly to confirm 0 failures
 ```
@@ -183,5 +198,10 @@ underlying class rather than a regression of the fixed one.
   `isSourceFileFromExternalLibrary()`.
 - `scripts/check-getjsemit.mjs` — proves `getJavaScriptEmit()` doesn't avoid the bug either,
   even given the full deterministic file list from `getSourceFileNames()`.
-- `scripts/diff-run-allroots.mjs` — the working workaround: every file listed as an explicit
-  root instead of just each package's `index.ts`. Run repeatedly to confirm 0 failures.
+- `scripts/diff-run-allroots.mjs` — first (blunt) working workaround: every file listed as an
+  explicit root instead of just each package's `index.ts`. Works, but over-includes
+  dead/unreferenced files.
+- `scripts/diff-run-discovery.mjs` — the recommended workaround: a discovery `Program` seeded
+  with just entry points, then the real `Program` re-rooted with exactly the real transitive
+  closure `getSourceFileNames()` reports. No filesystem walk, no dead files, same 0-failure
+  result.
